@@ -1,4 +1,7 @@
 const puppeteer = require('puppeteer');
+const { parse } = require('json2csv');
+const fs = require('fs');
+
 
 async function getParticipantDetails() {
   const baseUrl = 'https://login.6sense.com/';
@@ -114,13 +117,23 @@ console.log(`Total accounts: ${allData.length}`);
 // After you've collected all the URLs in allData...
 
 // Visit each URL and click the "Timeline" link
-/** 
-for (let data of allData) {
-    await visitAndClickTimeline(browser, data.cardURL);
+// This is within your getParticipantDetails function...
+
+let testing = true; // Set this to false when you want to process all accounts
+
+// After you've collected all the card data in allData...
+
+if (testing) {
+    // If testing, only process the first account
+    await visitAndClickTimeline(browser, allData[0]);
+} else {
+    // If not testing, process all accounts
+    for (let cardData of allData) {
+        // Visit each URL and click the "Timeline" link
+        await visitAndClickTimeline(browser, cardData);
+    }
 }
-*/
-// Simply call the function with the first URL
-await visitAndClickTimeline(browser, allData[0].cardURL);
+
 
   
 
@@ -130,8 +143,9 @@ await visitAndClickTimeline(browser, allData[0].cardURL);
   } 
 }
 
-async function visitAndClickTimeline(browser, cardURL) {
+async function visitAndClickTimeline(browser, cardData) {
     const page = await browser.newPage();
+    const cardURL = cardData.cardURL
     
     const fullURL = 'https://tenovos.abm.6sense.com' + cardURL;  
     await page.goto(fullURL, { waitUntil: 'networkidle0' });
@@ -186,14 +200,19 @@ async function visitAndClickTimeline(browser, cardURL) {
 
     // Extract and store the timeline card data
     
-    const timelineData = await extractTimelineData(page);
+    const timelineData = await extractTimelineData(page,cardData);
     // Continue your data extraction here...
 
     console.log(JSON.stringify(timelineData[0], null, 2));
+
+    await page.close();
+
+    writeToCSV(timelineData, 'output.csv')
+
   }
 
-  const extractTimelineData = async (page) => {
-    return await page.evaluate(() => {
+  const extractTimelineData = async (page,cardData) => {
+    return await page.evaluate((cardData) => {
         const timelineItems = Array.from(document.querySelectorAll('.timeline--1DYS0 > .timelineItem--Au13W'));
 
         return timelineItems.map(item => {
@@ -247,7 +266,7 @@ async function visitAndClickTimeline(browser, cardURL) {
                     timesViewed = description && description.match(regexNumAfterOf) ? parseInt(description.match(regexNumAfterOf)[1], 10) : null;
                 }
 
-                return { description, detail, pagesViewed, timesViewed, numberOfPeople };
+                return { cardData,description, detail, pagesViewed, timesViewed, numberOfPeople };
             });
 
             return {
@@ -255,8 +274,37 @@ async function visitAndClickTimeline(browser, cardURL) {
                 activities
             };
         }).filter(item => item.date !== null || item.activities.length !== 0); // remove empty objects
-    });
+    },cardData);
 };
+
+function writeToCSV(data, filename) {
+  // Flatten the data into a format suitable for CSV.
+  const flatData = data.reduce((acc, dayData) => {
+    const { date, activities } = dayData;
+
+    const dayActivities = activities.map(activity => {
+      // Copy the activity data and add the date.
+      const flatActivity = { ...activity, date };
+
+      // Further flatten the 'cardData' object if it exists
+      if (activity.cardData) {
+        flatActivity.cardURL = activity.cardData.cardURL;
+        flatActivity.companyName = activity.cardData.companyName;
+        flatActivity.countryWebsite = activity.cardData.countryWebsite;
+
+        // Remove the original 'cardData' object
+        delete flatActivity.cardData;
+      }
+
+      return flatActivity;
+    });
+
+    return [...acc, ...dayActivities];
+  }, []);
+
+  const csv = parse(flatData);
+  fs.writeFileSync(filename, csv);
+}
 
 
 getParticipantDetails();
