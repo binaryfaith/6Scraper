@@ -185,17 +185,78 @@ async function visitAndClickTimeline(browser, cardURL) {
   await page.waitForTimeout(2000); // wait for some time for the options to appear
 
     // Extract and store the timeline card data
-    const timelineData = await page.$$eval('div.timelineCard--2JA72 li', lis => lis.map(li => {
-        const spans = Array.from(li.querySelectorAll('span'));
-        const spanTexts = spans.map(span => span.innerText);
-        return spanTexts;
-      }));
-      
-      console.log(timelineData); 
+    
+    const timelineData = await extractTimelineData(page);
     // Continue your data extraction here...
+
+    console.log(JSON.stringify(timelineData[0], null, 2));
   }
-  
-  
-  
+
+  const extractTimelineData = async (page) => {
+    return await page.evaluate(() => {
+        const timelineItems = Array.from(document.querySelectorAll('.timeline--1DYS0 > .timelineItem--Au13W'));
+
+        return timelineItems.map(item => {
+            const dateNode = item.querySelector('.timelineDateFormatted--DUS0D span');
+            const date = dateNode ? dateNode.innerText : null;
+
+            const activityItems = Array.from(item.querySelectorAll('.timeline--1DYS0 > .timelineItem--Au13W'));
+            const activities = activityItems.map(li => {
+                const descriptionNode = li.querySelector('.title--3sI-u span span');
+                const description = descriptionNode ? descriptionNode.innerText : null;
+
+                const detailLinkNodes = Array.from(li.querySelectorAll('.link--1qTbM a'));
+                const detailLinks = detailLinkNodes.map(a => a.href).join(', ');
+
+                const detailSpanNodes = Array.from(li.querySelectorAll('.title--3sI-u span span:not(:first-child)'));
+                const detailSpans = detailSpanNodes.map(span => span.innerText).join(', ');
+
+                const keywordNodes = Array.from(li.querySelectorAll('.pill--2Rph2 .keywordText--1jpwR'));
+                const keywords = keywordNodes.map(span => span.innerText).join(', ');
+
+                let detail = null;
+                if (detailLinks.length > 0) {
+                    detail = detailLinks;
+                } else if (detailSpans.length > 0) {
+                    detail = detailSpans;
+                } else if (keywords.length > 0) {
+                    detail = keywords;
+                }
+
+                const regexFirstNum = /\d+/;
+                const regexNumAfterOf = /of (\d+)/;
+                const regexNumAfterBy = /by (\d+)/;
+
+                let pagesViewed, timesViewed, numberOfPeople;
+
+                numberOfPeople = description && description.match(regexNumAfterBy) ? parseInt(description.match(regexNumAfterBy)[1], 10) : null;
+
+                if (description && description.includes("clicked")) {
+                    pagesViewed = description && description.match(regexFirstNum) ? parseInt(description.match(regexFirstNum)[0], 10) : null;
+                    timesViewed = description && description.match(regexNumAfterOf) ? parseInt(description.match(regexNumAfterOf)[1], 10) : null;
+                    let timesClicked = timesViewed;
+                    return { description, detail, pagesViewed, timesClicked, numberOfPeople };
+                } else if (description && description.includes("researched")) {
+                    pagesViewed = description && description.match(regexFirstNum) ? parseInt(description.match(regexFirstNum)[0], 10) : null;
+                    timesViewed = description && description.match(regexNumAfterOf) ? parseInt(description.match(regexNumAfterOf)[1], 10) : null;
+                    let keywordsResearched = pagesViewed;
+                    let timesResearched = timesViewed;
+                    return { description, detail, keywordsResearched, timesResearched, numberOfPeople };
+                } else {
+                    pagesViewed = description && description.match(regexFirstNum) ? parseInt(description.match(regexFirstNum)[0], 10) : null;
+                    timesViewed = description && description.match(regexNumAfterOf) ? parseInt(description.match(regexNumAfterOf)[1], 10) : null;
+                }
+
+                return { description, detail, pagesViewed, timesViewed, numberOfPeople };
+            });
+
+            return {
+                date,
+                activities
+            };
+        }).filter(item => item.date !== null || item.activities.length !== 0); // remove empty objects
+    });
+};
+
 
 getParticipantDetails();

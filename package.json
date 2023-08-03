@@ -10,6 +10,6 @@
   "license": "ISC",
   "dependencies": {
     "json2csv": "^6.0.0-alpha.2",
-    "puppeteer": "^19.7.3"
+    "puppeteer": "^19.11.1"
   }
 }
