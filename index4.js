@@ -86,7 +86,7 @@ let cards = await page.$$(cardSelector);
 let allData = [];
 
 // Loop through each page in the paginator
-for (let i = 1; i <= 1/*lastPage*/; i++) {
+for (let i = 1; i <= lastPage; i++) {
     // Wait for the cards to load
     await page.waitForSelector(cardSelector);
     
@@ -119,28 +119,47 @@ console.log(`Total accounts: ${allData.length}`);
 // Visit each URL and click the "Timeline" link
 // This is within your getParticipantDetails function...
 
-let testing = true; // Set this to false when you want to process all accounts
+let testing = false; // Set this to false when you want to process all accounts
 
-// After you've collected all the card data in allData...
+// Create an array to hold all the extracted data
+let allExtractedData = [];
 
 if (testing) {
-    // If testing, only process the first account
-    await visitAndClickTimeline(browser, allData[0]);
+  // If testing, only process the first account
+  let extractedData = await visitAndClickTimeline(browser, allData[0]);
+  allExtractedData.push(extractedData);
 } else {
-    // If not testing, process all accounts
-    for (let cardData of allData) {
-        // Visit each URL and click the "Timeline" link
-        await visitAndClickTimeline(browser, cardData);
+  // If not testing, process all accounts
+  for (let index = 0; index < allData.length; index++) {
+    try {
+        let extractedData = await visitAndClickTimeline(browser, allData[index]);
+        allExtractedData.push(extractedData);
+        
+        // Generate a filename for each account based on the company name
+        let companyName = allData[index].companyName;
+        const filename = `${companyName.replace(/[^a-z0-9]/gi, '_').toLowerCase()}.csv`;
+        writeToCSV(extractedData, filename);
+        
+    } catch (error) {
+        console.error(`Error processing URL at index ${index}: ${allData[index].url}`);
+        console.error(`Associated cardData: ${JSON.stringify(allData[index])}`);
+        console.error(`Error message: ${error.message}`);
+        break;
     }
+  }
+  
 }
 
+// At this point, allExtractedData contains the data extracted from all the visited URLs
+// You can now call the writeToCSV function with allExtractedData as its argument
 
-  
+// Write extracted data to CSV
+await browser.close();
 
-    // Continue your scraping logic here...
-  } catch (error) {
-    console.error('An error occurred:', error);
-  } 
+// Continue your scraping logic here...
+} catch (error) {
+console.error('An error occurred:', error);
+}
 }
 
 async function visitAndClickTimeline(browser, cardData) {
@@ -207,11 +226,12 @@ async function visitAndClickTimeline(browser, cardData) {
 
     await page.close();
 
-    writeToCSV(timelineData, 'output.csv')
+    return timelineData
+    //writeToCSV(timelineData, 'output.csv')
 
   }
 
-  const extractTimelineData = async (page,cardData) => {
+  const extractTimelineData = async (page, cardData) => {
     return await page.evaluate((cardData) => {
         const timelineItems = Array.from(document.querySelectorAll('.timeline--1DYS0 > .timelineItem--Au13W'));
 
@@ -245,28 +265,36 @@ async function visitAndClickTimeline(browser, cardData) {
                 const regexFirstNum = /\d+/;
                 const regexNumAfterOf = /of (\d+)/;
                 const regexNumAfterBy = /by (\d+)/;
+                const regexNumAfterIn = /in (\d+)/; // new regex for finding number after "in"
 
-                let pagesViewed, timesViewed, numberOfPeople;
+                let pagesViewed, timesViewed, numberOfPeople, impressions, campaigns;
 
                 numberOfPeople = description && description.match(regexNumAfterBy) ? parseInt(description.match(regexNumAfterBy)[1], 10) : null;
+
+                // new condition for description includes "Media"
+                if (description && description.includes("Media")) {
+                    impressions = description && description.match(regexFirstNum) ? parseInt(description.match(regexFirstNum)[0], 10) : null;
+                    campaigns = description && description.match(regexNumAfterIn) ? parseInt(description.match(regexNumAfterIn)[1], 10) : null;
+                    return { ...cardData, description, detail, impressions, campaigns };
+                }
 
                 if (description && description.includes("clicked")) {
                     pagesViewed = description && description.match(regexFirstNum) ? parseInt(description.match(regexFirstNum)[0], 10) : null;
                     timesViewed = description && description.match(regexNumAfterOf) ? parseInt(description.match(regexNumAfterOf)[1], 10) : null;
                     let timesClicked = timesViewed;
-                    return { description, detail, pagesViewed, timesClicked, numberOfPeople };
+                    return { ...cardData, description, detail, pagesViewed, timesClicked, numberOfPeople };
                 } else if (description && description.includes("researched")) {
                     pagesViewed = description && description.match(regexFirstNum) ? parseInt(description.match(regexFirstNum)[0], 10) : null;
                     timesViewed = description && description.match(regexNumAfterOf) ? parseInt(description.match(regexNumAfterOf)[1], 10) : null;
                     let keywordsResearched = pagesViewed;
                     let timesResearched = timesViewed;
-                    return { description, detail, keywordsResearched, timesResearched, numberOfPeople };
+                    return { ...cardData, description, detail, keywordsResearched, timesResearched, numberOfPeople };
                 } else {
                     pagesViewed = description && description.match(regexFirstNum) ? parseInt(description.match(regexFirstNum)[0], 10) : null;
                     timesViewed = description && description.match(regexNumAfterOf) ? parseInt(description.match(regexNumAfterOf)[1], 10) : null;
                 }
 
-                return { cardData,description, detail, pagesViewed, timesViewed, numberOfPeople };
+                return { ...cardData, description, detail, pagesViewed, timesViewed, numberOfPeople };
             });
 
             return {
@@ -274,37 +302,35 @@ async function visitAndClickTimeline(browser, cardData) {
                 activities
             };
         }).filter(item => item.date !== null || item.activities.length !== 0); // remove empty objects
-    },cardData);
+    }, cardData);
 };
 
+
+
 function writeToCSV(data, filename) {
-  // Flatten the data into a format suitable for CSV.
   const flatData = data.reduce((acc, dayData) => {
     const { date, activities } = dayData;
-
+    if (!activities) {
+      console.log('Warning: no activities for this entry:', dayData);
+      return acc;
+    }
     const dayActivities = activities.map(activity => {
-      // Copy the activity data and add the date.
       const flatActivity = { ...activity, date };
-
-      // Further flatten the 'cardData' object if it exists
       if (activity.cardData) {
         flatActivity.cardURL = activity.cardData.cardURL;
         flatActivity.companyName = activity.cardData.companyName;
         flatActivity.countryWebsite = activity.cardData.countryWebsite;
-
-        // Remove the original 'cardData' object
         delete flatActivity.cardData;
       }
-
       return flatActivity;
     });
-
     return [...acc, ...dayActivities];
   }, []);
-
   const csv = parse(flatData);
   fs.writeFileSync(filename, csv);
 }
+
+
 
 
 getParticipantDetails();
