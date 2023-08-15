@@ -1,10 +1,26 @@
 const puppeteer = require('puppeteer');
 const { parse } = require('json2csv');
 const fs = require('fs');
+require('dotenv').config();
+
+
+// Function to retry an operation
+async function retry(operation, retryCount) {
+  for(let i = 0; i < retryCount; i++) {
+    try {
+      return await operation();
+    } catch(error) {
+      console.log(`Attempt ${i + 1} failed. Retrying...`);
+    }
+  }
+  throw new Error(`Operation failed after ${retryCount} attempts`);
+}
 
 
 async function getParticipantDetails() {
   const baseUrl = 'https://login.6sense.com/';
+  const email = process.env.EMAIL;
+  const password = process.env.PASSWORD;
 
   const browser = await puppeteer.launch({
     executablePath: '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
@@ -35,10 +51,10 @@ async function getParticipantDetails() {
     const loginButtonSelector = 'button[type="submit"]';  // Assuming the login button is of type submit
 
     await page.waitForSelector(emailInputSelector);
-    await page.type(emailInputSelector, 'binaryfaith@gmail.com');
+    await page.type(emailInputSelector, email);
 
     await page.waitForSelector(passwordInputSelector);
-    await page.type(passwordInputSelector, 'Pacifica1!');  // Replace with your actual password
+    await page.type(passwordInputSelector, password);  // Replace with your actual password
 
     await page.waitForSelector(loginButtonSelector);
     await page.click(loginButtonSelector);
@@ -130,16 +146,18 @@ if (testing) {
   allExtractedData.push(extractedData);
 } else {
   // If not testing, process all accounts
-  for (let index = 0; index < allData.length; index++) {
+  for (let index = 112; index < allData.length; index++) {
     try {
-        let extractedData = await visitAndClickTimeline(browser, allData[index]);
-        allExtractedData.push(extractedData);
-        
-        // Generate a filename for each account based on the company name
-        let companyName = allData[index].companyName;
-        const filename = `${companyName.replace(/[^a-z0-9]/gi, '_').toLowerCase()}.csv`;
-        writeToCSV(extractedData, filename);
-        
+        // Wrap the visitAndClickTimeline call in a retry function
+        await retry(async () => {
+          let extractedData = await visitAndClickTimeline(browser, allData[index]);
+          allExtractedData.push(extractedData);
+
+          // Generate a filename for each account based on the company name
+          let companyName = allData[index].companyName;
+          const filename = `${companyName.replace(/[^a-z0-9]/gi, '_').toLowerCase()}.csv`;
+          writeToCSV(extractedData, filename);
+        }, 3);  // Retry 3 times
     } catch (error) {
         console.error(`Error processing URL at index ${index}: ${allData[index].url}`);
         console.error(`Associated cardData: ${JSON.stringify(allData[index])}`);
@@ -147,7 +165,6 @@ if (testing) {
         break;
     }
   }
-  
 }
 
 // At this point, allExtractedData contains the data extracted from all the visited URLs
