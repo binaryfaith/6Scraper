@@ -2,6 +2,8 @@ const puppeteer = require('puppeteer');
 const { parse } = require('json2csv');
 const fs = require('fs');
 require('dotenv').config();
+const path = require('path');
+
 
 
 // Function to retry an operation
@@ -24,7 +26,7 @@ async function getParticipantDetails() {
 
   const browser = await puppeteer.launch({
     executablePath: '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
-    headless: false
+    headless: true
   });
 
   const page = await browser.newPage();
@@ -63,7 +65,7 @@ async function getParticipantDetails() {
     await page.waitForNavigation({ waitUntil: 'networkidle0' });
 
      // Navigate to the analytics page
-     const analyticsPageUrl = 'https://tenovos.abm.6sense.com/segments/segment/494087/analytics/';
+     const analyticsPageUrl = 'https://tenovos.abm.6sense.com/segments/segment/507786/analytics/';
      await page.goto(analyticsPageUrl, { waitUntil: 'networkidle0' });
  
     // Extract the number of accounts
@@ -74,11 +76,15 @@ async function getParticipantDetails() {
     let numAccounts;
     for (let div of divs) {
       let text = await page.evaluate(element => element.textContent, div);
-      if (text.includes('Accounts')) {
-        numAccounts = text.match(/\((\d+)\)/)[1];
+      console.log(text); // This will log the content of each div
+    
+      const matchedGroups = text.match(/\((\d+)\)/);
+      if (text.includes('Accounts') && matchedGroups) {
+        numAccounts = matchedGroups[1];
         break;
       }
     }
+    
 
     console.log(numAccounts);  // Print out the number of accounts
 
@@ -146,18 +152,25 @@ if (testing) {
   allExtractedData.push(extractedData);
 } else {
   // If not testing, process all accounts
-  for (let index = 112; index < allData.length; index++) {
+  for (let index = 0; index < allData.length; index++) {
     try {
         // Wrap the visitAndClickTimeline call in a retry function
         await retry(async () => {
           let extractedData = await visitAndClickTimeline(browser, allData[index]);
-          allExtractedData.push(extractedData);
-
-          // Generate a filename for each account based on the company name
-          let companyName = allData[index].companyName;
-          const filename = `${companyName.replace(/[^a-z0-9]/gi, '_').toLowerCase()}.csv`;
-          writeToCSV(extractedData, filename);
-        }, 3);  // Retry 3 times
+      
+          // Check if the extracted data has content before writing to CSV
+          if (extractedData.length > 0) {
+              allExtractedData.push(extractedData);
+      
+              // Generate a filename for each account based on the company name
+              let companyName = allData[index].companyName;
+              const filename = `${companyName.replace(/[^a-z0-9]/gi, '_').toLowerCase()}.csv`;
+              writeToCSV(extractedData, filename);
+          } else {
+              console.log(`No timeline data found for URL at index ${index}: ${allData[index].url}`);
+          }
+      }, 3);  // Retry 3 times
+      
     } catch (error) {
         console.error(`Error processing URL at index ${index}: ${allData[index].url}`);
         console.error(`Associated cardData: ${JSON.stringify(allData[index])}`);
@@ -170,13 +183,13 @@ if (testing) {
 // At this point, allExtractedData contains the data extracted from all the visited URLs
 // You can now call the writeToCSV function with allExtractedData as its argument
 
-// Write extracted data to CSV
-await browser.close();
-
 // Continue your scraping logic here...
 } catch (error) {
 console.error('An error occurred:', error);
+}finally {
+  await browser.close();
 }
+
 }
 
 async function visitAndClickTimeline(browser, cardData) {
@@ -187,52 +200,62 @@ async function visitAndClickTimeline(browser, cardData) {
     await page.goto(fullURL, { waitUntil: 'networkidle0' });
     
     // Click the Timeline button
+    await page.waitForSelector('span');
     await page.evaluate(() => {
-      const timelineButton = Array.from(document.querySelectorAll('span')).find(el => el.innerText.trim() === "Timeline");
-      if (timelineButton) {
-        timelineButton.click();
-      }
+        const timelineButton = Array.from(document.querySelectorAll('span')).find(el => el.innerText.trim() === "Timeline");
+        if (timelineButton) {
+            timelineButton.click();
+        }
     });
-  
-    await page.waitForTimeout(2000); // wait for some time for the dropdown to be clickable
-  
-    // Open the dropdown
+    
+    await page.waitForSelector('.rc-select-selection');
     await page.evaluate(() => {
-      const dropdown = document.querySelector('.rc-select-selection');
-      if (dropdown) {
-        dropdown.click();
-      }
+        const dropdown = document.querySelector('.rc-select-selection');
+        if (dropdown) {
+            dropdown.click();
+        }
     });
-  
-    await page.waitForTimeout(2000); // wait for some time for the options to appear
-  
-    // Select "Last 180 Days" from the dropdown
+    
+    await page.waitForSelector('.rc-select-dropdown li');
     await page.evaluate(() => {
-      const option = Array.from(document.querySelectorAll('.rc-select-dropdown li')).find(el => el.innerText.trim() === "Last 180 Days");
-      if (option) {
-        option.click();
-      }
+        const option = Array.from(document.querySelectorAll('.rc-select-dropdown li')).find(el => el.innerText.trim() === "Last 180 Days");
+        if (option) {
+            option.click();
+        }
     });
 
-    await page.waitForTimeout(2000); // wait for some time for the options to appear
+
+ let loadMoreButtonExists = true;
+
+ while (loadMoreButtonExists) {
+     try {
+         await Promise.race([
+             page.waitForSelector('.center--3W8zC', { timeout: 5000 }),
+             page.waitForSelector('button.loadMoreBtn--QwqI7', { timeout: 5000 })
+         ]);
+ 
+         const centerDivExists = await page.evaluate(() => {
+             return !!document.querySelector('.center--3W8zC');
+         });
+ 
+         if (centerDivExists) {
+             console.log("Center div detected. Exiting loop.");
+             return []; // Indicate no timeline data
+         }
+ 
+         await page.evaluate(() => {
+             const loadMoreButton = document.querySelector('button.loadMoreBtn--QwqI7');
+             if (loadMoreButton) {
+                 loadMoreButton.click();
+             }
+         });
+     } catch (error) {
+         console.error("Loadmore exhausted or center div not found. Exiting loop.");
+         loadMoreButtonExists = false;
+     }
+ }
   
-      // Click the Load More button until it's not present
-  let loadMoreButtonExists = true;
-  while (loadMoreButtonExists) {
-    loadMoreButtonExists = await page.evaluate(() => {
-      const loadMoreButton = document.querySelector('button.loadMoreBtn--QwqI7');
-      if (loadMoreButton) {
-        loadMoreButton.click();
-        return true;
-      } else {
-        return false;
-      }
-    });
-    // Pause to allow page to update content
-    await page.waitForTimeout(2000); 
-  }
-  
-  await page.waitForTimeout(2000); // wait for some time for the options to appear
+  await page.waitForTimeout(500); // wait for some time for the options to appear
 
     // Extract and store the timeline card data
     
@@ -326,28 +349,40 @@ async function visitAndClickTimeline(browser, cardData) {
 
 function writeToCSV(data, filename) {
   const flatData = data.reduce((acc, dayData) => {
-    const { date, activities } = dayData;
-    if (!activities) {
-      console.log('Warning: no activities for this entry:', dayData);
-      return acc;
-    }
-    const dayActivities = activities.map(activity => {
-      const flatActivity = { ...activity, date };
-      if (activity.cardData) {
-        flatActivity.cardURL = activity.cardData.cardURL;
-        flatActivity.companyName = activity.cardData.companyName;
-        flatActivity.countryWebsite = activity.cardData.countryWebsite;
-        delete flatActivity.cardData;
+      const { date, activities } = dayData;
+      if (!activities) {
+          console.log('Warning: no activities for this entry:', dayData);
+          return acc;
       }
-      return flatActivity;
-    });
-    return [...acc, ...dayActivities];
+      const dayActivities = activities.map(activity => {
+          const flatActivity = { ...activity, date };
+          if (activity.cardData) {
+              flatActivity.cardURL = activity.cardData.cardURL;
+              flatActivity.companyName = activity.cardData.companyName;
+              flatActivity.countryWebsite = activity.cardData.countryWebsite;
+              delete flatActivity.cardData;
+          }
+          return flatActivity;
+      });
+      return [...acc, ...dayActivities];
   }, []);
+  
   const csv = parse(flatData);
-  fs.writeFileSync(filename, csv);
+
+  // Construct the path to the CSV directory
+  const csvDir = path.join(__dirname, 'CSV');
+  
+  // Check if the CSV directory exists, if not, create it
+  if (!fs.existsSync(csvDir)) {
+      fs.mkdirSync(csvDir);
+  }
+
+  // Construct the full path for the CSV file
+  const csvFilePath = path.join(csvDir, filename);
+
+  // Now write the CSV content to this path
+  fs.writeFileSync(csvFilePath, csv);
 }
-
-
 
 
 getParticipantDetails();
